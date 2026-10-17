@@ -1,1 +1,67 @@
+name: Build ChoirMaker
 
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  dsp-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: DSP unit test
+        run: |
+          g++ -std=c++17 -O2 -Wall -Wextra -ISource tests/engine_test.cpp -o engine_test
+          ./engine_test
+
+  build:
+    needs: dsp-test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: Windows
+          - os: macos-latest
+            name: macOS
+          - os: ubuntu-latest
+            name: Linux
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libjack-jackd2-dev libfreetype-dev libfontconfig1-dev \
+            libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev \
+            libxrender-dev libglu1-mesa-dev mesa-common-dev
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Collect plugins
+        shell: bash
+        run: |
+          mkdir -p dist
+          find build -type d \( -name "*.vst3" -o -name "*.component" \) -prune -exec cp -R {} dist/ \;
+          find build -type f -path "*Standalone*" \( -name "ChoirMaker" -o -name "ChoirMaker.exe" \) -exec cp {} dist/ \; || true
+          find build -type d -name "ChoirMaker.app" -prune -exec cp -R {} dist/ \; || true
+          ls -la dist
+
+      - name: Add Windows installer script
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          printf '@echo off\r\nnet session >nul 2>&1 || (echo Right-click this file and choose "Run as administrator" & pause & exit /b 1)\r\nxcopy /E /I /Y "%%~dp0ChoirMaker.vst3" "C:\\Program Files\\Common Files\\VST3\\ChoirMaker.vst3"\r\necho Installed. Rescan plugins in your DAW.\r\npause\r\n' > dist/Install-ChoirMaker.bat
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ChoirMaker-${{ matrix.name }}
+          path: dist
